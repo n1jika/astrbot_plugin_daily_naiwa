@@ -12,6 +12,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
+import astrbot.api.message_components as Comp
 from astrbot.api.star import Context, Star
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
@@ -120,12 +121,12 @@ class DailyNaiwa(Star):
             if result is None:
                 yield event.plain_result("素材库还是空的，请管理员在插件配置中上传图片。")
                 return
-            asset_id, fresh, collected = result
-            description = ("今天的奶娃来啦！" if fresh else "你今天已经抽过啦，这是你的今日奶娃！")
-            if collected:
-                description += "\n图鉴解锁新奶娃！"
-            yield event.plain_result(description)
-            yield event.image_result(str(self.catalog.image_path(asset_id)))
+            asset_id, _fresh, _collected = result
+            yield event.chain_result([
+                Comp.At(qq=event.get_sender_id()),
+                Comp.Plain("，这是你的今日奶娃："),
+                Comp.Image.fromFileSystem(str(self.catalog.image_path(asset_id))),
+            ])
         except CatalogError as exc:
             logger.warning(f"今日奶娃素材读取失败: {exc}")
             yield event.plain_result(f"素材读取失败：{exc}，请管理员检查插件配置。")
@@ -152,8 +153,12 @@ class DailyNaiwa(Star):
                 yield event.plain_result(f"页码无效，请输入 1 到 {pages}。")
                 return
             collected = sum(bool(entry[2]) for entry in entries)
-            yield event.plain_result(f"奶娃图鉴：已收集 {collected}/{len(entries)}，第 {page}/{pages} 页。\n使用 /奶娃图鉴 页码 翻页。")
-            yield event.image_result(str(path))
+            yield event.chain_result([
+                Comp.At(qq=event.get_sender_id()),
+                Comp.Plain("，这是你的奶娃图鉴："),
+                Comp.Image.fromFileSystem(str(path)),
+                Comp.Plain(f"已收集 {collected}/{len(entries)}，第 {page}/{pages} 页。使用 /奶娃图鉴 页码 翻页。"),
+            ])
         except CatalogError as exc:
             logger.warning(f"奶娃图鉴素材读取失败: {exc}")
             yield event.plain_result(f"素材读取失败：{exc}，请管理员检查插件配置。")

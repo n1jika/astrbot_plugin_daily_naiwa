@@ -13,10 +13,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 # Provide only AstrBot's interface; this checks handlers but is not an E2E test.
-for name in ("astrbot", "astrbot.api", "astrbot.api.event", "astrbot.api.star", "astrbot.core", "astrbot.core.utils", "astrbot.core.utils.astrbot_path"):
+for name in ("astrbot", "astrbot.api", "astrbot.api.event", "astrbot.api.star", "astrbot.api.message_components", "astrbot.core", "astrbot.core.utils", "astrbot.core.utils.astrbot_path"):
     module = types.ModuleType(name)
     module.__path__ = []
     sys.modules[name] = module
+
+components = sys.modules["astrbot.api.message_components"]
+class At:
+    def __init__(self, qq):
+        self.qq = qq
+class Plain:
+    def __init__(self, text):
+        self.text = text
+class ImageComponent:
+    @classmethod
+    def fromFileSystem(cls, path):
+        instance = cls()
+        instance.path = path
+        return instance
+components.At, components.Plain, components.Image = At, Plain, ImageComponent
 
 api = sys.modules["astrbot.api"]
 api.AstrBotConfig = dict
@@ -53,8 +68,8 @@ class Event:
         return "same-user"
     def plain_result(self, text):
         return ("text", text)
-    def image_result(self, path):
-        return ("image", path)
+    def chain_result(self, chain):
+        return ("chain", chain)
 
 async def collect(generator):
     return [item async for item in generator]
@@ -77,13 +92,20 @@ class HandlerTest(unittest.TestCase):
                 return first, second, gallery
 
             first, second, gallery = asyncio.run(run())
-            self.assertEqual(first[1][1], second[1][1])
-            self.assertEqual(Path(first[1][1]).suffix, ".gif")
-            self.assertEqual(Path(first[1][1]).read_bytes(), image_path.read_bytes())
-            with Image.open(first[1][1]) as sent:
+            self.assertEqual(len(first), 1)
+            self.assertEqual(first[0][0], "chain")
+            self.assertEqual(first[0][1][0].qq, "same-user")
+            self.assertEqual(first[0][1][1].text, "，这是你的今日奶娃：")
+            self.assertEqual(first[0][1][2].path, second[0][1][2].path)
+            self.assertEqual(Path(first[0][1][2].path).suffix, ".gif")
+            self.assertEqual(Path(first[0][1][2].path).read_bytes(), image_path.read_bytes())
+            with Image.open(first[0][1][2].path) as sent:
                 self.assertEqual(sent.n_frames, 2)
-            self.assertIn("1/1", gallery[0][1])
-            with Image.open(gallery[1][1]) as atlas:
+            self.assertEqual(len(gallery), 1)
+            self.assertEqual(gallery[0][1][0].qq, "same-user")
+            self.assertEqual(gallery[0][1][1].text, "，这是你的奶娃图鉴：")
+            self.assertIn("1/1", gallery[0][1][3].text)
+            with Image.open(gallery[0][1][2].path) as atlas:
                 self.assertEqual(atlas.format, "PNG")
                 self.assertEqual(atlas.getpixel((50, 50)), (255, 0, 0))
 
@@ -106,21 +128,22 @@ class HandlerTest(unittest.TestCase):
                 invalid = await collect(instance.gallery(Event("group-b"), 3))
                 return first, second, page1, page2, invalid
             first, second, page1, page2, invalid = asyncio.run(run())
-            self.assertEqual(first[1][1], second[1][1])
-            self.assertIn("已经抽过", second[0][1])
-            self.assertIn("1/17", page1[0][1])
-            self.assertIn("1/2", page1[0][1])
-            self.assertIn("2/2", page2[0][1])
+            self.assertEqual(first[0][1][2].path, second[0][1][2].path)
+            self.assertEqual(second[0][1][0].qq, "same-user")
+            self.assertEqual(second[0][1][1].text, "，这是你的今日奶娃：")
+            self.assertIn("1/17", page1[0][1][3].text)
+            self.assertIn("1/2", page1[0][1][3].text)
+            self.assertIn("2/2", page2[0][1][3].text)
             self.assertIn("页码无效", invalid[0][1])
             # A locked tile is painted as a question mark and does not expose the image.
             entries = instance.catalog.entries("aiocqhttp", "same-user")
             locked = next(i for i, row in enumerate(entries[:16]) if not row[2])
             x = 16 + (locked % 4) * 162
             y = 16 + (locked // 4) * 188
-            with Image.open(page1[1][1]) as atlas:
+            with Image.open(page1[0][1][2].path) as atlas:
                 tile = atlas.crop((x, y, x + 150, y + 150))
                 self.assertNotEqual(tile.getpixel((75, 75)), tile.getpixel((10, 10)))
-            self.assertTrue(Path(first[1][1]).is_file())
+            self.assertTrue(Path(first[0][1][2].path).is_file())
 
 if __name__ == "__main__":
     unittest.main()
