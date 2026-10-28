@@ -119,6 +119,92 @@ class CatalogTest(unittest.TestCase):
         self.assertEqual(self.catalog.draw("aiocqhttp", "123", "2026-10-28")[0], asset)
         self.assertEqual(len(self.catalog.entries("aiocqhttp", "123")), 1)
 
+class ZipCatalogTest(unittest.TestCase):
+    setUp = CatalogTest.setUp
+    tearDown = CatalogTest.tearDown
+    make_image = CatalogTest.make_image
+    sync = CatalogTest.sync
+    def write_zip(self, name, files):
+        import zipfile
+        with zipfile.ZipFile(self.upload / name, 'w', zipfile.ZIP_DEFLATED) as archive:
+            for filename, data in files:
+                archive.writestr(filename, data)
+
+    def test_unchanged_archive_cache_and_missing_snapshot_recovery(self):
+        from unittest.mock import patch
+        data = (self.upload / 'one.png').read_bytes()
+        asset_id = hashlib.sha256(data).hexdigest()
+        self.write_zip('pack.zip', [('nested/one.png', data)])
+        self.sync('pack.zip')
+        with patch.object(self.catalog, '_archive_images', wraps=self.catalog._archive_images) as reader:
+            self.sync('pack.zip')
+            reader.assert_not_called()
+            self.catalog.image_path(asset_id).unlink()
+            self.sync('pack.zip')
+            reader.assert_called_once()
+        self.assertTrue(self.catalog.image_path(asset_id).exists())
+
+    def test_mixed_zip_and_single_file_deduplicates_and_preserves_gif(self):
+        gif = self.upload / 'animation.gif'
+        Image.new('RGB', (12, 12), 'red').save(
+            gif, save_all=True, append_images=[Image.new('RGB', (12, 12), 'blue')],
+            duration=[100, 220], loop=0,
+        )
+        gif_data = gif.read_bytes()
+        first = (self.upload / 'one.png').read_bytes()
+        second = (self.upload / 'two.png').read_bytes()
+        self.write_zip('pack.zip', [('nested/one.png', first), ('nested/deep/ani.gif', gif_data),
+                                    ('__MACOSX/._two.png', b'not an image'), ('notes.txt', b'ignore')])
+        self.sync('pack.zip', 'one.png', 'two.png')
+        entries = self.catalog.entries('aiocqhttp', '123')
+        self.assertEqual(len(entries), 3)
+        gif_id = hashlib.sha256(gif_data).hexdigest()
+        self.assertEqual(self.catalog.image_path(gif_id).read_bytes(), gif_data)
+        with Image.open(self.catalog.image_path(gif_id)) as image:
+            self.assertEqual(image.n_frames, 2)
+        # Replace and then remove the ZIP after the user has collected its GIF.
+        with self.catalog._connect() as db:
+            db.execute('INSERT INTO draws VALUES (?, ?, ?, ?)', ('aiocqhttp', '123', '2026-10-28', gif_id))
+            db.execute('INSERT INTO collection VALUES (?, ?, ?)', ('aiocqhttp', '123', gif_id))
+        self.write_zip('pack.zip', [('new/two.png', second)])
+        self.sync('pack.zip')
+        self.assertEqual(self.catalog.draw('aiocqhttp', '123', '2026-10-28')[0], gif_id)
+        self.assertEqual(self.catalog.image_path(gif_id).read_bytes(), gif_data)
+        self.assertTrue(any(row[0] == gif_id and row[2] for row in self.catalog.entries('aiocqhttp', '123')))
+        self.sync()
+        self.assertEqual(self.catalog.image_path(gif_id).read_bytes(), gif_data)
+
+    def test_bad_and_unsafe_archives_do_not_replace_active_pool(self):
+        self.sync('one.png')
+        before = self.catalog.entries('aiocqhttp', '456')
+        for name, content in [('../outside.png', b'xx'), ('/absolute.png', b'xx'),
+                              ('C:/drive.png', b'xx'), ('bad\\path.png', b'xx')]:
+            self.write_zip('bad.zip', [('valid.png', (self.upload / 'two.png').read_bytes()), (name, content)])
+            with self.assertRaises(CatalogError):
+                self.sync('bad.zip')
+            self.assertEqual(self.catalog.entries('aiocqhttp', '456'), before)
+        self.write_zip('bad.zip', [('notes.txt', b'none')])
+        with self.assertRaisesRegex(CatalogError, '没有支持的图片'):
+            self.sync('bad.zip')
+        (self.upload / 'bad.zip').write_bytes(b'not a zip')
+        with self.assertRaises(CatalogError):
+            self.sync('bad.zip')
+        self.assertEqual(self.catalog.entries('aiocqhttp', '456'), before)
+
+    def test_archive_limits_and_invalid_image(self):
+        import unittest.mock
+        with unittest.mock.patch('store.MAX_ARCHIVE_ENTRIES', 1):
+            self.write_zip('bad.zip', [('1.txt', b''), ('2.txt', b'')])
+            with self.assertRaisesRegex(CatalogError, '条目过多'):
+                self.sync('bad.zip')
+        with unittest.mock.patch('store.MAX_IMAGE_BYTES', 5):
+            self.write_zip('bad.zip', [('nested/large.png', b'123456')])
+            with self.assertRaisesRegex(CatalogError, '图片过大'):
+                self.sync('bad.zip')
+        self.write_zip('bad.zip', [('nested/corrupt.gif', b'broken')])
+        with self.assertRaisesRegex(CatalogError, '无法读取图片'):
+            self.sync('bad.zip')
+
 
 if __name__ == "__main__":
     unittest.main()
