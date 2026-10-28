@@ -3,7 +3,7 @@
     "description": "奶娃素材图片",
     "type": "file",
     "default": [],
-    "file_types": ["png", "jpg", "jpeg", "webp"],
+    "file_types": ["png", "jpg", "jpeg", "webp", "gif"],
     "hint": "上传多张图片作为抽取素材。修改后保存配置，并重载插件。"
   }
 }

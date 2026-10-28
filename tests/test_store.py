@@ -1,4 +1,5 @@
 import concurrent.futures
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -79,6 +80,44 @@ class CatalogTest(unittest.TestCase):
         self.assertIsNotNone(self.catalog.draw("aiocqhttp", "123", "2026-10-28"))
         with self.assertRaises(CatalogError):
             self.catalog.sync(["../../outside.png"])
+
+    def test_animated_gif_is_kept_exactly_after_removal(self):
+        path = self.upload / "animated.gif"
+        red = Image.new("RGB", (20, 20), "red")
+        blue = Image.new("RGB", (20, 20), "blue")
+        red.save(path, save_all=True, append_images=[blue], duration=[100, 250], loop=0)
+        original = path.read_bytes()
+        self.sync("animated.gif")
+        asset, _, _ = self.catalog.draw("aiocqhttp", "123", "2026-10-28")
+        snapshot = self.catalog.image_path(asset)
+        self.assertEqual(snapshot.suffix, ".gif")
+        self.assertEqual(snapshot.read_bytes(), original)
+        path.unlink()
+        self.sync()
+        self.assertEqual(self.catalog.draw("aiocqhttp", "123", "2026-10-28")[0], asset)
+        with Image.open(self.catalog.image_path(asset)) as image:
+            self.assertEqual(image.n_frames, 2)
+            self.assertEqual(image.info["duration"], 100)
+            image.seek(1)
+            self.assertEqual(image.info["duration"], 250)
+        self.assertTrue(self.catalog.entries("aiocqhttp", "123")[0][2])
+
+    def test_existing_png_snapshot_is_compatible_and_can_restore_gif(self):
+        path = self.upload / "legacy.gif"
+        red = Image.new("RGB", (20, 20), "red")
+        red.save(path, save_all=True, append_images=[Image.new("RGB", (20, 20), "blue")], duration=100, loop=0)
+        asset = hashlib.sha256(path.read_bytes()).hexdigest()
+        # Reproduce a previously imported GIF that only had a PNG snapshot.
+        red.save(self.catalog.images / f"{asset}.png")
+        with self.catalog._connect() as db:
+            db.execute("INSERT INTO assets VALUES (?, 1, 1)", (asset,))
+            db.execute("INSERT INTO draws VALUES (?, ?, ?, ?)", ("aiocqhttp", "123", "2026-10-28", asset))
+            db.execute("INSERT INTO collection VALUES (?, ?, ?)", ("aiocqhttp", "123", asset))
+        self.assertEqual(self.catalog.image_path(asset).suffix, ".png")
+        self.sync("legacy.gif")
+        self.assertEqual(self.catalog.image_path(asset).read_bytes(), path.read_bytes())
+        self.assertEqual(self.catalog.draw("aiocqhttp", "123", "2026-10-28")[0], asset)
+        self.assertEqual(len(self.catalog.entries("aiocqhttp", "123")), 1)
 
 
 if __name__ == "__main__":

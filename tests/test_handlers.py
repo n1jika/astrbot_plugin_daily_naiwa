@@ -60,6 +60,33 @@ async def collect(generator):
     return [item async for item in generator]
 
 class HandlerTest(unittest.TestCase):
+    def test_gif_draw_and_static_gallery_first_frame(self):
+        with tempfile.TemporaryDirectory() as root:
+            plugin.get_astrbot_data_path = lambda: root
+            directory = Path(root) / "plugin_data" / Star.name / "files" / "images"
+            directory.mkdir(parents=True)
+            image_path = directory / "animated.gif"
+            first_frame = Image.new("RGB", (10, 10), "red")
+            first_frame.save(image_path, save_all=True, append_images=[Image.new("RGB", (10, 10), "blue")], duration=100, loop=0)
+            instance = plugin.DailyNaiwa(None, {"images": ["files/images/animated.gif"]})
+
+            async def run():
+                first = await collect(instance.daily_naiwa(Event("group-a")))
+                second = await collect(instance.daily_naiwa(Event("group-b")))
+                gallery = await collect(instance.gallery(Event("group-b")))
+                return first, second, gallery
+
+            first, second, gallery = asyncio.run(run())
+            self.assertEqual(first[1][1], second[1][1])
+            self.assertEqual(Path(first[1][1]).suffix, ".gif")
+            self.assertEqual(Path(first[1][1]).read_bytes(), image_path.read_bytes())
+            with Image.open(first[1][1]) as sent:
+                self.assertEqual(sent.n_frames, 2)
+            self.assertIn("1/1", gallery[0][1])
+            with Image.open(gallery[1][1]) as atlas:
+                self.assertEqual(atlas.format, "PNG")
+                self.assertEqual(atlas.getpixel((50, 50)), (255, 0, 0))
+
     def test_cross_group_and_gallery_render(self):
         with tempfile.TemporaryDirectory() as root:
             plugin.get_astrbot_data_path = lambda: root

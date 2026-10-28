@@ -44,6 +44,8 @@ def render_gallery(catalog, entries, page):
         draw.rounded_rectangle((x, y, x + cell, y + cell), radius=12, fill="#eadfe4")
         if collected:
             with Image.open(catalog.image_path(asset_id)) as source:
+                # The atlas is a static image; animated GIFs use their first frame.
+                source.seek(0)
                 thumb = ImageOps.fit(source.convert("RGB"), (cell, cell))
                 canvas.paste(thumb, (x, y))
         else:

@@ -51,6 +51,11 @@ class Catalog:
         return db
 
     def image_path(self, asset_id: str) -> Path:
+        # GIF snapshots retain their original animation. Older versions wrote
+        # PNG snapshots only, so keep those as the fallback for existing data.
+        gif = self.images / f"{asset_id}.gif"
+        if gif.is_file():
+            return gif
         return self.images / f"{asset_id}.png"
 
     def sync(self, configured_files: list[str]):
@@ -72,9 +77,29 @@ class Catalog:
                     raise CatalogError(f"图片过大（最大 20 MB）：{path.name}")
                 data = path.read_bytes()
                 asset_id = hashlib.sha256(data).hexdigest()
-                dest = self.image_path(asset_id)
-                if not dest.is_file():
-                    with Image.open(io.BytesIO(data)) as image:
+                with Image.open(io.BytesIO(data)) as image:
+                    if image.format == "GIF":
+                        # Never transcode an animated GIF: re-encoding or taking
+                        # the first frame would destroy the animation. Prefer a
+                        # GIF snapshot even when an old PNG snapshot exists.
+                        image.seek(0)
+                        image.load()
+                        dest = self.images / f"{asset_id}.gif"
+                        if not dest.is_file():
+                            with tempfile.NamedTemporaryFile(dir=self.images, suffix=".gif", delete=False) as tmp:
+                                tmp_name = tmp.name
+                                tmp.write(data)
+                            try:
+                                os.replace(tmp_name, dest)
+                            finally:
+                                if os.path.exists(tmp_name):
+                                    os.unlink(tmp_name)
+                    else:
+                        dest = self.images / f"{asset_id}.png"
+                        if dest.is_file():
+                            if asset_id not in ids:
+                                ids.append(asset_id)
+                            continue
                         image.seek(0)
                         image = ImageOps.exif_transpose(image).convert("RGB")
                         image.thumbnail((4096, 4096))
