@@ -1,4 +1,4 @@
-"""今日奶娃: a per-user daily draw and illustrated collection."""
+"""今日奶蛙: a per-user daily draw and illustrated collection."""
 
 import asyncio
 import hashlib
@@ -17,6 +17,7 @@ from astrbot.api.star import Context, Star
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
 from .store import Catalog, CatalogError
+from .management import AssetManagement
 
 
 PAGE_SIZE = 16
@@ -39,7 +40,7 @@ def render_gallery(catalog, entries, page):
     canvas = Image.new("RGB", (margin * 2 + columns * cell + (columns - 1) * gap,
                                margin * 2 + rows * (cell + 26) + (rows - 1) * gap), "#fff5f7")
     draw = ImageDraw.Draw(canvas)
-    for index, (asset_id, ordinal, collected, _active) in enumerate(current):
+    for index, (asset_id, _ordinal, collected, _active) in enumerate(current):
         x = margin + (index % columns) * (cell + gap)
         y = margin + (index // columns) * (cell + 26 + gap)
         draw.rounded_rectangle((x, y, x + cell, y + cell), radius=12, fill="#eadfe4")
@@ -51,7 +52,8 @@ def render_gallery(catalog, entries, page):
                 canvas.paste(thumb, (x, y))
         else:
             draw.text((x + cell // 2, y + cell // 2), "?", anchor="mm", fill="#9e8290", font=_font(70))
-        draw.text((x + cell // 2, y + cell + 13), f"#{ordinal}", anchor="mm", fill="#6c515e", font=_font(16))
+        # The number is the position on this page, matching /查看图鉴 x y.
+        draw.text((x + cell // 2, y + cell + 13), f"#{index + 1}", anchor="mm", fill="#6c515e", font=_font(16))
     cache = catalog.directory / "gallery_cache"
     cache.mkdir(parents=True, exist_ok=True)
     # Remove old generated pages while leaving recent in-flight sends intact.
@@ -63,7 +65,8 @@ def render_gallery(catalog, entries, page):
         except OSError:
             pass
     # Reuse the same page when its contents have not changed, and avoid exposing IDs.
-    digest = hashlib.sha256(repr((page, current)).encode()).hexdigest()
+    # Version the layout key so old cached pages do not show global ordinals.
+    digest = hashlib.sha256(repr(("page-item-v2", page, current)).encode()).hexdigest()
     target = cache / f"{digest}.png"
     if not target.exists():
         with tempfile.NamedTemporaryFile(dir=cache, suffix=".png", delete=False) as tmp:
@@ -84,6 +87,8 @@ class DailyNaiwa(Star):
         data_dir = Path(get_astrbot_data_path()) / "plugin_data" / self.name
         self.catalog = Catalog(data_dir)
         self._lock = asyncio.Lock()
+        self.asset_management = AssetManagement(self)
+        self.asset_management.register(context)
 
     def _sync(self):
         files = self.config.get("images", [])
@@ -105,10 +110,24 @@ class DailyNaiwa(Star):
             return None, entries, pages
         return render_gallery(self.catalog, entries, page), entries, pages
 
-    @filter.command("今日奶娃")
+    def _gallery_item(self, platform, user_id, page, item):
+        self._sync()
+        entries = self.catalog.entries(platform, user_id)
+        pages = max(1, (len(entries) + PAGE_SIZE - 1) // PAGE_SIZE)
+        if page < 1 or page > pages:
+            return "page", None, pages
+        index = (page - 1) * PAGE_SIZE + item - 1
+        if item < 1 or item > PAGE_SIZE or index >= len(entries):
+            return "item", None, pages
+        asset_id, _ordinal, collected, _active = entries[index]
+        if not collected:
+            return "locked", None, pages
+        return "ok", asset_id, pages
+
+    @filter.command("今日奶蛙")
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     async def daily_naiwa(self, event: AstrMessageEvent):
-        """每天抽取一张奶娃图片；当天跨群共用结果。"""
+        """每天抽取一张奶蛙图片；当天跨群共用结果。"""
         if not event.get_sender_id():
             yield event.plain_result("无法识别发送者，暂时无法抽取。")
             return
@@ -122,22 +141,24 @@ class DailyNaiwa(Star):
                 yield event.plain_result("素材库还是空的，请管理员在插件配置中上传图片。")
                 return
             asset_id, _fresh, _collected = result
+            name, description = await asyncio.to_thread(self.catalog.get_metadata, asset_id)
             yield event.chain_result([
                 Comp.At(qq=event.get_sender_id()),
-                Comp.Plain("，这是你的今日奶娃："),
+                Comp.Plain(f"，你的今日奶蛙是{f'“{name}”' if name else ''}：\n"),
                 Comp.Image.fromFileSystem(str(self.catalog.image_path(asset_id))),
+                *([Comp.Plain(f"\n{description}")] if description else []),
             ])
         except CatalogError as exc:
-            logger.warning(f"今日奶娃素材读取失败: {exc}")
+            logger.warning(f"今日奶蛙素材读取失败: {exc}")
             yield event.plain_result(f"素材读取失败：{exc}，请管理员检查插件配置。")
         except Exception:
-            logger.exception("今日奶娃抽取失败")
+            logger.exception("今日奶蛙抽取失败")
             yield event.plain_result("抽取失败，请管理员查看 AstrBot 日志。")
 
-    @filter.command("奶娃图鉴")
+    @filter.command("奶蛙图鉴")
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     async def gallery(self, event: AstrMessageEvent, page: int = 1):
-        """查看奶娃收集进度，使用 /奶娃图鉴 页码 翻页。"""
+        """查看奶蛙收集进度，使用 /奶蛙图鉴 页码 翻页。"""
         if not event.get_sender_id():
             yield event.plain_result("无法识别发送者，暂时无法查看图鉴。")
             return
@@ -155,13 +176,45 @@ class DailyNaiwa(Star):
             collected = sum(bool(entry[2]) for entry in entries)
             yield event.chain_result([
                 Comp.At(qq=event.get_sender_id()),
-                Comp.Plain("，这是你的奶娃图鉴："),
+                Comp.Plain("，这是你的奶蛙图鉴："),
                 Comp.Image.fromFileSystem(str(path)),
-                Comp.Plain(f"已收集 {collected}/{len(entries)}，第 {page}/{pages} 页。使用 /奶娃图鉴 页码 翻页。"),
+                Comp.Plain(f"已收集 {collected}/{len(entries)}，第 {page}/{pages} 页。使用 /奶蛙图鉴 页码 翻页，使用 /查看图鉴 页码 项目 查看已解锁图片。"),
             ])
         except CatalogError as exc:
-            logger.warning(f"奶娃图鉴素材读取失败: {exc}")
+            logger.warning(f"奶蛙图鉴素材读取失败: {exc}")
             yield event.plain_result(f"素材读取失败：{exc}，请管理员检查插件配置。")
         except Exception:
-            logger.exception("奶娃图鉴生成失败")
+            logger.exception("奶蛙图鉴生成失败")
             yield event.plain_result("图鉴生成失败，请管理员查看 AstrBot 日志。")
+
+    @filter.command("查看图鉴")
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
+    async def view_gallery_item(self, event: AstrMessageEvent, page: int, item: int):
+        """使用 /查看图鉴 页码 项目 查看该页已解锁的图片。"""
+        if not event.get_sender_id():
+            yield event.plain_result("无法识别发送者，暂时无法查看图鉴。")
+            return
+        try:
+            async with self._lock:
+                status, asset_id, pages = await asyncio.to_thread(
+                    self._gallery_item, event.get_platform_name(), str(event.get_sender_id()), page, item,
+                )
+            if status == "page":
+                yield event.plain_result(f"页码无效，请输入 1 到 {pages}。")
+                return
+            if status == "item":
+                yield event.plain_result("该页没有这个项目，请输入图鉴中显示的项目编号。")
+                return
+            if status == "locked":
+                yield event.plain_result("该奶蛙未解锁！")
+                return
+            yield event.chain_result([
+                Comp.At(qq=event.get_sender_id()),
+                Comp.Image.fromFileSystem(str(self.catalog.image_path(asset_id))),
+            ])
+        except CatalogError as exc:
+            logger.warning(f"奶蛙图鉴素材读取失败: {exc}")
+            yield event.plain_result(f"素材读取失败：{exc}，请管理员检查插件配置。")
+        except Exception:
+            logger.exception("查看奶蛙图鉴图片失败")
+            yield event.plain_result("查看图片失败，请管理员查看 AstrBot 日志。")

@@ -73,6 +73,41 @@ class CatalogTest(unittest.TestCase):
         self.assertEqual(self.catalog.draw("aiocqhttp", "123", "2026-10-29")[0], first)
         self.assertEqual(len(self.catalog.entries("aiocqhttp", "123")), 1)
 
+    def test_metadata_survives_restart_removal_and_reupload(self):
+        self.sync("one.png")
+        asset, _, _ = self.catalog.draw("aiocqhttp", "123", "2026-10-28")
+        self.assertEqual(self.catalog.get_metadata(asset), ("", ""))
+        self.catalog.set_metadata(asset, " 小青 ", "一只小蛙")
+        self.sync()
+        reopened = Catalog(self.root)
+        self.assertEqual(reopened.get_metadata(asset), ("小青", "一只小蛙"))
+        self.assertFalse(reopened.list_assets()[0]["active"])
+        self.assertTrue(reopened.entries("aiocqhttp", "123")[0][2])
+        self.sync("one.png")
+        self.assertEqual(self.catalog.get_metadata(asset), ("小青", "一只小蛙"))
+        self.assertEqual(self.catalog.existing_draw("aiocqhttp", "123", "2026-10-28")[0], asset)
+
+    def test_metadata_validation(self):
+        self.sync("one.png")
+        asset = self.catalog.list_assets()[0]["id"]
+        with self.assertRaises(CatalogError):
+            self.catalog.set_metadata("missing", "name", "description")
+        with self.assertRaises(CatalogError):
+            self.catalog.set_metadata(asset, "x" * 101, "")
+        with self.assertRaises(CatalogError):
+            self.catalog.set_metadata(asset, "", "x" * 2001)
+        self.assertEqual(self.catalog.get_metadata(asset), ("", ""))
+
+    def test_upgrade_existing_database_keeps_draws_and_collections(self):
+        self.sync("one.png")
+        asset = self.catalog.draw("aiocqhttp", "123", "2026-10-28")[0]
+        with self.catalog._connect() as db:
+            db.execute("DROP TABLE asset_metadata")  # Simulate the previous version.
+        upgraded = Catalog(self.root)
+        self.assertEqual(upgraded.existing_draw("aiocqhttp", "123", "2026-10-28")[0], asset)
+        self.assertTrue(upgraded.entries("aiocqhttp", "123")[0][2])
+        self.assertEqual(upgraded.get_metadata(asset), ("", ""))
+
     def test_failed_sync_preserves_active_pool(self):
         self.sync("one.png")
         with self.assertRaises(CatalogError):

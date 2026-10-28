@@ -1,6 +1,6 @@
 {
   "images": {
-    "description": "奶娃素材图片",
+    "description": "奶蛙素材图片",
     "type": "file",
     "default": [],
     "file_types": ["png", "jpg", "jpeg", "webp", "gif", "zip"],

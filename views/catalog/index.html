@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>奶蛙素材管理</title>
+    <link rel="stylesheet" href="./style.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <div><p class="eyebrow">今日奶蛙</p><h1>素材管理</h1><p class="subtitle">为每张图片设置名称和介绍，抽取时会一起发送。</p></div>
+        <button id="refresh" class="secondary" type="button">刷新素材</button>
+      </header>
+      <div class="notice">请先在插件配置中上传图片或 ZIP、保存并重载插件。相同内容的图片共用一份资料。</div>
+      <div class="toolbar"><label class="search"><span>搜索素材</span><input id="search" type="search" placeholder="搜索名称或编号"></label><span id="summary"></span></div>
+      <div id="status" role="status" aria-live="polite"></div>
+      <section id="items" class="items" aria-label="素材列表"></section>
+      <nav class="pagination" aria-label="素材分页"><button id="prev" class="secondary" type="button">上一页</button><span id="page"></span><button id="next" class="secondary" type="button">下一页</button></nav>
+    </main>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

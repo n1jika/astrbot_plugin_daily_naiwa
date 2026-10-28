@@ -10,6 +10,7 @@ import sqlite3
 import stat
 import tempfile
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -55,12 +56,22 @@ class Catalog:
                     asset_id TEXT NOT NULL REFERENCES assets(id),
                     PRIMARY KEY (platform, user_id, asset_id)
                 );
+                CREATE TABLE IF NOT EXISTS asset_metadata (
+                    asset_id TEXT PRIMARY KEY REFERENCES assets(id),
+                    name TEXT NOT NULL DEFAULT '',
+                    description TEXT NOT NULL DEFAULT ''
+                );
             """)
 
+    @contextmanager
     def _connect(self):
         db = sqlite3.connect(self.db, timeout=30)
-        db.execute("PRAGMA foreign_keys=ON")
-        return db
+        try:
+            db.execute("PRAGMA foreign_keys=ON")
+            with db:
+                yield db
+        finally:
+            db.close()
 
     def image_path(self, asset_id: str) -> Path:
         # GIF snapshots retain their original animation. Older versions wrote
@@ -69,6 +80,40 @@ class Catalog:
         if gif.is_file():
             return gif
         return self.images / f"{asset_id}.png"
+
+    def get_metadata(self, asset_id: str):
+        """Read metadata without changing old asset, draw, or collection rows."""
+        with self._connect() as db:
+            row = db.execute("""SELECT m.name, m.description FROM assets a
+                LEFT JOIN asset_metadata m ON m.asset_id = a.id WHERE a.id = ?""",
+                (asset_id,)).fetchone()
+        if row is None:
+            raise CatalogError("图片不存在")
+        return (row[0] or "", row[1] or "")
+
+    def list_assets(self):
+        """Include retired snapshots so historical collections remain editable."""
+        with self._connect() as db:
+            rows = db.execute("""SELECT a.id, a.ordinal, a.active, m.name, m.description
+                FROM assets a LEFT JOIN asset_metadata m ON m.asset_id = a.id
+                ORDER BY a.ordinal""").fetchall()
+        return [{"id": asset_id, "ordinal": ordinal, "active": bool(active),
+                 "name": name or "", "description": description or ""}
+                for asset_id, ordinal, active, name, description in rows]
+
+    def set_metadata(self, asset_id: str, name: str, description: str):
+        if not isinstance(name, str) or not isinstance(description, str):
+            raise CatalogError("名称和介绍必须为文字")
+        name, description = name.strip(), description.strip()
+        if len(name) > 100 or len(description) > 2000:
+            raise CatalogError("名称最多 100 字，介绍最多 2000 字")
+        with self._connect() as db:
+            if db.execute("SELECT 1 FROM assets WHERE id = ?", (asset_id,)).fetchone() is None:
+                raise CatalogError("图片不存在")
+            db.execute("""INSERT INTO asset_metadata(asset_id, name, description)
+                VALUES (?, ?, ?) ON CONFLICT(asset_id) DO UPDATE SET
+                name=excluded.name, description=excluded.description""",
+                (asset_id, name, description))
 
     def _archive_images(self, path: Path, data: bytes):
         """Read bounded image entries directly; never extract paths to disk."""
