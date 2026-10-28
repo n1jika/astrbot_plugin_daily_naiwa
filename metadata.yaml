@@ -1,7 +1,7 @@
 name: astrbot_plugin_daily_naiwa
-display_name: 今日奶娃
-desc: 每日抽取一张奶娃图片，收集点亮个人图鉴。
-version: 1.0.3
+display_name: 今日奶蛙
+desc: 每日抽取一张奶蛙图片，收集点亮个人图鉴。
+version: 1.1.0
 author: n1jika
 repo: https://github.com/n1jika/astrbot_plugin_daily_naiwa
-astrbot_version: ">=4.13.0"
+astrbot_version: ">=4.29.1"
